@@ -15,12 +15,34 @@ from langchain.chains import RetrievalQA
 from getpass import getpass
 from tabulate import tabulate
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain.retrievers import ContextualCompressionRetriever
 import torch
 
 
 # Semantic Search Pipeline for PDF Documents
 # This script loads PDF documents from a specified directory, splits them into chunks,
 # and prepares them for semantic search using LangChain.
+
+
+# Helper function for printing docs
+def pretty_print_docs(docs):
+    doc0 = docs[0]
+    doc1 = docs[1]
+    doc2 = docs[2]
+
+    print(
+        tabulate(
+            [
+                [doc0.page_content, doc0.metadata],
+                [doc1.page_content, doc1.metadata],
+                [doc2.page_content, doc2.metadata],
+            ],
+            maxcolwidths=[40, 100],
+            tablefmt="grid",
+        )
+    )
 
 
 # DocumentLoader class is responsible for loading PDF documents from a directory
@@ -113,16 +135,27 @@ class SimilaritySearch:
 
     def similarity_search_with_score(self, query: str):
         results = self.vectorstore.similarity_search_with_score(query, k=4)
-        doc1, score1 = results[0]
-        doc2, score2 = results[1]
+        doc0, score0 = results[0]
+        doc1, score1 = results[1]
+        doc2, score2 = results[2]
         print(
             tabulate(
                 [
-                    ["Document Content", "Metadata", "Score"],
+                    [
+                        "Similarity Search on Vector store",
+                        "",
+                        "",
+                    ],
+                    [
+                        "Document Content",
+                        "Metadata",
+                        "Score",
+                    ],
+                    [doc0.page_content, doc0.metadata, score0],
                     [doc1.page_content, doc1.metadata, score1],
                     [doc2.page_content, doc2.metadata, score2],
                 ],
-                maxcolwidths=[40, 120, None],
+                maxcolwidths=[40, 100, 20],
                 tablefmt="grid",
             )
         )
@@ -132,26 +165,36 @@ class SimilaritySearch:
 # The Retriever class uses Chroma to retrieve relevant documents based on a query,
 # applying Maximum Marginal Relevance (MMR) to optimize for relevance and diversity.
 class Retriever:
-    def __init__(self, vectorstore: Chroma, k: int = 3):
+    def __init__(self, vectorstore: Chroma, k: int = 5):
+
+        # Fetch more documents for the MMR algorithm to consider
+        # But only return the top 5
         self.retriever = vectorstore.as_retriever(
-            search_type="mmr", search_kwargs={"k": k}  # Maximum Marginal Relevance
+            search_type="mmr",
+            search_kwargs={"k": k},  # Maximum Marginal Relevance
         )
 
     def get_relevant_documents(self, query: str) -> List[Document]:
         results = self.retriever.invoke(query)
-        print(
-            tabulate(
-                [
-                    ["Document Content", "Metadata"],
-                    [results[0].page_content, results[0].metadata],
-                    [results[1].page_content, results[1].metadata],
-                ],
-                maxcolwidths=[40, 120],
-                tablefmt="grid",
-            )
-        )
-
+        pretty_print_docs(results)
         return self.retriever.invoke(query)
+
+
+# The ReRanker class can be used to re-rank documents retrieved by the Retriever based on additional criteria.
+class ReRanker:
+    def __init__(self, retriever: Retriever):
+        self.retriever = retriever
+
+    def rerank_documents(self, query: str) -> List[Document]:
+        # This method can be implemented to re-rank documents based on additional criteria
+        # For now, it simply returns the documents retrieved by the retriever
+        model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
+        compressor = CrossEncoderReranker(model=model, top_n=3)
+        compression_retriever = ContextualCompressionRetriever(
+            base_compressor=compressor, base_retriever=self.retriever
+        )
+        print(f"Asking question with reranking: {query}")
+        return compression_retriever.invoke(query)
 
 
 # The PromptManager class creates prompts in the Zephyr format,
@@ -165,10 +208,12 @@ You are an AI Assistant that follows instructions extremely well.
 Please be truthful and give direct answers. Please tell 'I don't know' if user query is not in context
 </s>
 <|user|>
-Context: {context}
-
-Question: {query}
-</s>
+Context: 
+  % for doc in documents %
+    doc.content URL:doc.meta['url']
+  % endfor %;
+  Question: {query}
+  </s>
 <|assistant|>
 """
 
@@ -221,13 +266,7 @@ class ResponseGenerator:
         print(f"Asking question: {question}")
         try:
             result = self.qa_chain.invoke(question)
-            return {
-                "answer": result["result"],
-                "source_documents": [
-                    {"content": doc.page_content, "metadata": doc.metadata}
-                    for doc in result["source_documents"]
-                ],
-            }
+            pretty_print_docs(result["source_documents"])
         except Exception as e:
             return None
 
@@ -239,13 +278,7 @@ class ResponseGenerator:
         print(f"Asking question: {prompt}")
         try:
             result = self.qa_chain.invoke(prompt)
-            return {
-                "answer": result["result"],
-                "source_documents": [
-                    {"content": doc.page_content, "metadata": doc.metadata}
-                    for doc in result["source_documents"]
-                ],
-            }
+            pretty_print_docs(result["source_documents"])
         except Exception as e:
             return None
 
@@ -262,6 +295,7 @@ class RAGPipeline:
         self.generator = None
         self.similaritysearch = None
         self.retriever_component = None
+        self.reranker = None
 
     async def build(self):
         documents = await self.loader.load_content()
@@ -271,6 +305,7 @@ class RAGPipeline:
         self.similaritysearch = SimilaritySearch(self.vectorstore)
         self.retriever_component = Retriever(self.vectorstore)
         self.retriever = self.retriever_component.retriever
+        self.reranker = ReRanker(self.retriever)
         self.generator = ResponseGenerator()
         self.qa_chain = self.generator.setup_qa_chain(self.retriever)
 
@@ -281,26 +316,14 @@ class RAGPipeline:
         # Retrieve relevant documents using VectorStoreRetriever
         self.retriever_component.get_relevant_documents(question)
 
-        response = self.generator.ask_question(
-            "What are some of the challenges of industry 5.0?"
-        )
-        print(
-            tabulate(
-                [
-                    [response["answer"]],
-                    [response["source_documents"][0].get("content", "")],
-                    [response["source_documents"][0].get("metadata", "")],
-                    [response["source_documents"][1].get("content", "")],
-                    [response["source_documents"][1].get("metadata", "")],
-                ],
-                maxcolwidths=[60, 60, 60],
-                tablefmt="grid",
-            )
-        )
+        # Ask the question using the ResponseGenerator
+        response = self.generator.ask_question(question)
 
         # Create a Zephyr prompt for the question
         prompt = PromptManager.create_zephyr_prompt(question)
-        response = self.generator.ask_question_from_prompt(prompt)
+        self.generator.ask_question_from_prompt(prompt)
+        reranked_documents = self.reranker.rerank_documents(question)
+        pretty_print_docs(reranked_documents)
 
         return response
 
@@ -316,7 +339,7 @@ async def main():
     pipeline = RAGPipeline(Path(directory))
     await pipeline.build()
 
-    query = "What are some of the challenges of industry 5.0?"
+    query = "What is the business model of WazirX ?"
     response = pipeline.query(query)
 
 
