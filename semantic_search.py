@@ -6,7 +6,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain_chroma import Chroma
 from langchain_huggingface import (
-    HuggingFaceEndpoint,
     HuggingFaceEndpointEmbeddings,
     HuggingFaceEmbeddings,
     HuggingFacePipeline,
@@ -18,6 +17,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers import ContextualCompressionRetriever
+from langchain_core.prompts import PromptTemplate
 import torch
 
 
@@ -138,84 +138,46 @@ class SimilaritySearch:
         doc0, score0 = results[0]
         doc1, score1 = results[1]
         doc2, score2 = results[2]
-        print(
-            tabulate(
-                [
-                    [
-                        "Similarity Search on Vector store",
-                        "",
-                        "",
-                    ],
-                    [
-                        "Document Content",
-                        "Metadata",
-                        "Score",
-                    ],
-                    [doc0.page_content, doc0.metadata, score0],
-                    [doc1.page_content, doc1.metadata, score1],
-                    [doc2.page_content, doc2.metadata, score2],
-                ],
-                maxcolwidths=[40, 100, 20],
-                tablefmt="grid",
-            )
-        )
+        pretty_print_docs([doc0, doc1, doc2])
 
 
 # Responsible for fetching relevant documents from a knowledge base (often a vector store) based on a query.
 # The Retriever class uses Chroma to retrieve relevant documents based on a query,
 # applying Maximum Marginal Relevance (MMR) to optimize for relevance and diversity.
 class Retriever:
-    def __init__(self, vectorstore: Chroma, k: int = 5):
+    def __init__(self, vectorstore: Chroma, k: int = 20):
 
         # Fetch more documents for the MMR algorithm to consider
         # But only return the top 5
         self.retriever = vectorstore.as_retriever(
             search_type="mmr",
-            search_kwargs={"k": k},  # Maximum Marginal Relevance
+            search_kwargs={"k": k, "fetch_k": 50},  # Maximum Marginal Relevance
         )
 
     def get_relevant_documents(self, query: str) -> List[Document]:
         results = self.retriever.invoke(query)
         pretty_print_docs(results)
-        return self.retriever.invoke(query)
+        return results
 
 
-# The ReRanker class can be used to re-rank documents retrieved by the Retriever based on additional criteria.
-class ReRanker:
-    def __init__(self, retriever: Retriever):
-        self.retriever = retriever
-
-    def rerank_documents(self, query: str) -> List[Document]:
-        # This method can be implemented to re-rank documents based on additional criteria
-        # For now, it simply returns the documents retrieved by the retriever
-        model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
-        compressor = CrossEncoderReranker(model=model, top_n=3)
-        compression_retriever = ContextualCompressionRetriever(
-            base_compressor=compressor, base_retriever=self.retriever
-        )
-        print(f"Asking question with reranking: {query}")
-        return compression_retriever.invoke(query)
-
-
-# The PromptManager class creates prompts in the Zephyr format,
-# providing context to the model and guiding it to generate accurate responses.
 class PromptManager:
-    @staticmethod
-    def create_zephyr_prompt(query: str, context: str = "") -> str:
-        return f"""
-<|system|>
-You are an AI Assistant that follows instructions extremely well.
-Please be truthful and give direct answers. Please tell 'I don't know' if user query is not in context
-</s>
-<|user|>
-Context: 
-  % for doc in documents %
-    doc.content URL:doc.meta['url']
-  % endfor %;
-  Question: {query}
-  </s>
-<|assistant|>
-"""
+    def __init__(self):
+        self.prompt_template = """You are a story teller, answering questions in an excited, insightful, and empathetic way. Answer the question based only on the provided context:
+
+        <context>
+        {context}
+        </context>
+
+        Question: {question}"""
+
+    def create_prompt(self) -> PromptTemplate:
+        return PromptTemplate(
+            template=self.prompt_template,
+            input_variables=[
+                "context",
+                "question",
+            ],
+        )
 
 
 # LLM (Large Language Model): Generates the answer based on the retrieved documents and the query.
@@ -223,12 +185,14 @@ Context:
 #   The ResponseGenerator class integrates the HuggingFace model with the RetrievalQA chain,
 class ResponseGenerator:
     def __init__(self, model_id: str = "microsoft/DialoGPT-medium"):
+        self.retriever = None
         self.qa_chain = None
 
     def setup_qa_chain(self, retriever, model_name="microsoft/DialoGPT-medium"):
         """Setup QA chain with Hugging Face model"""
 
         try:
+            self.retriever = retriever
             # Setup tokenizer and model
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -246,12 +210,19 @@ class ResponseGenerator:
             # Create HuggingFace LLM
             llm = HuggingFacePipeline(pipeline=pipe)
 
+            model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
+            compressor = CrossEncoderReranker(model=model, top_n=3)
+            compression_retriever = ContextualCompressionRetriever(
+                base_compressor=compressor, base_retriever=self.retriever
+            )
+
             self.qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
-                chain_type="stuff",
-                retriever=retriever,
+                retriever=compression_retriever,
                 return_source_documents=True,
+                chain_type_kwargs={"prompt": PromptManager().create_prompt()},
             )
+
             return True
 
         except Exception as e:
@@ -266,18 +237,7 @@ class ResponseGenerator:
         print(f"Asking question: {question}")
         try:
             result = self.qa_chain.invoke(question)
-            pretty_print_docs(result["source_documents"])
-        except Exception as e:
-            return None
-
-    def ask_question_from_prompt(self, prompt: str):
-        """Ask a question using the QA chain"""
-        if self.qa_chain is None:
-            return None
-
-        print(f"Asking question: {prompt}")
-        try:
-            result = self.qa_chain.invoke(prompt)
+            print(f"Answer: {result['result']}")
             pretty_print_docs(result["source_documents"])
         except Exception as e:
             return None
@@ -305,7 +265,6 @@ class RAGPipeline:
         self.similaritysearch = SimilaritySearch(self.vectorstore)
         self.retriever_component = Retriever(self.vectorstore)
         self.retriever = self.retriever_component.retriever
-        self.reranker = ReRanker(self.retriever)
         self.generator = ResponseGenerator()
         self.qa_chain = self.generator.setup_qa_chain(self.retriever)
 
@@ -318,12 +277,6 @@ class RAGPipeline:
 
         # Ask the question using the ResponseGenerator
         response = self.generator.ask_question(question)
-
-        # Create a Zephyr prompt for the question
-        prompt = PromptManager.create_zephyr_prompt(question)
-        self.generator.ask_question_from_prompt(prompt)
-        reranked_documents = self.reranker.rerank_documents(question)
-        pretty_print_docs(reranked_documents)
 
         return response
 
