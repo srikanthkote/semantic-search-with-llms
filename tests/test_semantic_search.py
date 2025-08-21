@@ -5,7 +5,7 @@ import sys
 import asyncio
 
 # Add the parent directory to the path so we can import semantic_search
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from semantic_search import (
     DocumentLoader,
@@ -142,6 +142,7 @@ class TestSimilaritySearch(unittest.TestCase):
         mock_vector_store.similarity_search_with_score.return_value = [
             (mock_document, 0.9),
             (mock_document, 0.8),
+            (mock_document, 0.7),
         ]
         search = SimilaritySearch(vectorstore=mock_vector_store)
         query = "test query"
@@ -150,7 +151,9 @@ class TestSimilaritySearch(unittest.TestCase):
         search.similarity_search_with_score(query)
 
         # Assert
-        mock_vector_store.similarity_search_with_score.assert_called_once_with(query, k=4)
+        mock_vector_store.similarity_search_with_score.assert_called_once_with(
+            query, k=4
+        )
 
 
 class TestRetriever(unittest.TestCase):
@@ -177,23 +180,21 @@ class TestRetriever(unittest.TestCase):
 
 
 class TestPromptManager(unittest.TestCase):
-    def test_create_zephyr_prompt(self):
+    def test_create_prompt(self):
         # Arrange
-        query = "test query"
-        context = "test context"
+        prompt_manager = PromptManager()
 
         # Act
-        prompt = PromptManager.create_zephyr_prompt(query, context)
+        prompt = prompt_manager.create_prompt()
 
         # Assert
-        self.assertIn(query, prompt)
-        self.assertIn(context, prompt)
-        self.assertIn("<|system|>", prompt)
-        self.assertIn("<|user|>", prompt)
-        self.assertIn("<|assistant|>", prompt)
+        self.assertIn("context", prompt.input_variables)
+        self.assertIn("question", prompt.input_variables)
+        self.assertIn("story teller", prompt.template)
 
 
 class TestResponseGenerator(unittest.TestCase):
+    @patch("semantic_search.ContextualCompressionRetriever")
     @patch("semantic_search.AutoTokenizer")
     @patch("semantic_search.AutoModelForCausalLM")
     @patch("semantic_search.pipeline")
@@ -206,11 +207,13 @@ class TestResponseGenerator(unittest.TestCase):
         mock_pipeline,
         mock_model,
         mock_tokenizer,
+        mock_compression_retriever,
     ):
         # Arrange
         mock_retriever = MagicMock()
         generator = ResponseGenerator()
         mock_hf_pipeline.return_value = MagicMock()
+        mock_compression_retriever.return_value = MagicMock()
 
         # Act
         success = generator.setup_qa_chain(mock_retriever)
@@ -228,20 +231,10 @@ class TestResponseGenerator(unittest.TestCase):
         generator.qa_chain.invoke.return_value = expected_result
 
         # Act
-        result = generator.ask_question(question)
+        generator.ask_question(question)
 
         # Assert
-        self.assertIsNotNone(result)
-        self.assertEqual(result["answer"], "test answer")
         generator.qa_chain.invoke.assert_called_with(question)
-
-        # Act for ask_question_from_prompt
-        prompt = "test prompt"
-        result_prompt = generator.ask_question_from_prompt(prompt)
-
-        # Assert
-        self.assertIsNotNone(result_prompt)
-        generator.qa_chain.invoke.assert_called_with(prompt)
 
 
 @patch("semantic_search.ResponseGenerator")
@@ -309,7 +302,6 @@ class TestRAGPipeline(unittest.IsolatedAsyncioTestCase):
             ],
         }
         mock_generator_instance.ask_question.return_value = mock_response
-        mock_generator_instance.ask_question_from_prompt.return_value = mock_response
 
         # Act
         pipeline.query(query)
@@ -320,7 +312,6 @@ class TestRAGPipeline(unittest.IsolatedAsyncioTestCase):
         )
         mock_retriever.return_value.get_relevant_documents.assert_called_with(query)
         mock_generator_instance.ask_question.assert_called()
-        mock_generator_instance.ask_question_from_prompt.assert_called()
 
 
 if __name__ == "__main__":

@@ -28,18 +28,17 @@ import torch
 
 # Helper function for printing docs
 def pretty_print_docs(docs):
-    doc0 = docs[0]
-    doc1 = docs[1]
-    doc2 = docs[2]
 
+    if not docs:
+        print("No documents found.")
+        return
+
+    table_data = [[doc.page_content, doc.metadata] for doc in docs]
     print(
         tabulate(
-            [
-                [doc0.page_content, doc0.metadata],
-                [doc1.page_content, doc1.metadata],
-                [doc2.page_content, doc2.metadata],
-            ],
-            maxcolwidths=[40, 100],
+            table_data,
+            headers=["Page Content", "Metadata"],
+            maxcolwidths=[50, 100],
             tablefmt="grid",
         )
     )
@@ -135,10 +134,8 @@ class SimilaritySearch:
 
     def similarity_search_with_score(self, query: str):
         results = self.vectorstore.similarity_search_with_score(query, k=4)
-        doc0, score0 = results[0]
-        doc1, score1 = results[1]
-        doc2, score2 = results[2]
-        pretty_print_docs([doc0, doc1, doc2])
+        print(f"Found {len(results)} results for query: {query}")
+        pretty_print_docs([doc for doc, score in results])
 
 
 # Responsible for fetching relevant documents from a knowledge base (often a vector store) based on a query.
