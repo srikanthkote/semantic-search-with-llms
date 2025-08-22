@@ -214,6 +214,7 @@ class ResponseGenerator:
             # Create HuggingFace LLM
             llm = HuggingFacePipeline(pipeline=pipe)
 
+            # Create CrossEncoderReranker for document compression
             model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
             compressor = CrossEncoderReranker(model=model, top_n=5)
             compression_retriever = ContextualCompressionRetriever(
@@ -224,7 +225,7 @@ class ResponseGenerator:
                 llm=llm,
                 retriever=compression_retriever,
                 return_source_documents=True,
-                chain_type_kwargs={"prompt": PromptManager().create_prompt()},
+                # chain_type_kwargs={"prompt": PromptManager().create_prompt()},
             )
 
             return True
