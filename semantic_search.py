@@ -33,12 +33,14 @@ def pretty_print_docs(docs):
         print("No documents found.")
         return
 
-    table_data = [[doc.page_content, doc.metadata] for doc in docs]
+    print(f"Found {len(docs)} results")
+
+    table_data = [[doc.page_content, doc.metadata["source"]] for doc in docs]
     print(
         tabulate(
             table_data,
             headers=["Page Content", "Metadata"],
-            maxcolwidths=[50, 100],
+            maxcolwidths=[70, 70],
             tablefmt="grid",
         )
     )
@@ -90,11 +92,17 @@ class DocumentChunker:
 # These embeddings capture semantic relationships within the data, allowing machines to understand and compare different data points effectively.
 # Essentially, they convert complex information into a format that computers can easily process and analyze
 class HuggingFaceEmbeddings:
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        # Get HuggingFace token if not already set
-        if "HUGGINGFACEHUB_API_TOKEN" not in os.environ:
-            hf_token = getpass("Enter your HuggingFace API token: ")
-            os.environ["HUGGINGFACEHUB_API_TOKEN"] = hf_token
+    def __init__(
+        self,
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        api_token: str = None,
+    ):
+        if api_token:
+            os.environ["HUGGINGFACEHUB_API_TOKEN"] = api_token
+        elif "HUGGINGFACEHUB_API_TOKEN" not in os.environ:
+            raise ValueError(
+                "HuggingFace API token not found. Please set the HUGGINGFACEHUB_API_TOKEN environment variable or pass it as an argument."
+            )
 
         self.embeddings = HuggingFaceEndpointEmbeddings(
             model=model_name,
@@ -134,7 +142,6 @@ class SimilaritySearch:
 
     def similarity_search_with_score(self, query: str):
         results = self.vectorstore.similarity_search_with_score(query, k=4)
-        print(f"Found {len(results)} results for query: {query}")
         pretty_print_docs([doc for doc, score in results])
 
 
@@ -208,7 +215,7 @@ class ResponseGenerator:
             llm = HuggingFacePipeline(pipeline=pipe)
 
             model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
-            compressor = CrossEncoderReranker(model=model, top_n=3)
+            compressor = CrossEncoderReranker(model=model, top_n=5)
             compression_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor, base_retriever=self.retriever
             )
@@ -236,17 +243,19 @@ class ResponseGenerator:
             result = self.qa_chain.invoke(question)
             print(f"Answer: {result['result']}")
             pretty_print_docs(result["source_documents"])
+            return result
         except Exception as e:
+            print(f"Error asking question: {e}")
             return None
 
 
 # The RAGPipeline class integrates all components - loading, chunking, embeddings, retrieval, prompt creation, and model generation -
 # into a unified pipeline that processes queries and generates responses based on relevant documents.
 class RAGPipeline:
-    def __init__(self, dir: Path):
+    def __init__(self, dir: Path, hf_token: str = None):
         self.loader = DocumentLoader(dir)
         self.chunker = DocumentChunker()
-        self.embeddings = HuggingFaceEmbeddings()
+        self.embeddings = HuggingFaceEmbeddings(api_token=hf_token)
         self.vectorstore = None
         self.retriever = None
         self.generator = None
@@ -286,11 +295,32 @@ async def main():
     directory = os.path.expanduser("~") + "/Downloads/search-sources/"
     print(f"Building RAG pipeline for: {directory}")
 
-    pipeline = RAGPipeline(Path(directory))
+    # For command-line, we can use an environment variable for the token.
+    hf_token = os.environ.get("HUGGINGFACEHUB_API_TOKEN", None)
+    if not hf_token:
+        print("HuggingFace API token not found in environment variables.")
+        # fallback to asking the user, useful for local testing
+        try:
+            from getpass import getpass
+
+            hf_token = getpass("Enter your HuggingFace API token: ")
+        except ImportError:
+            print(
+                "getpass not available. Please set the HUGGINGFACEHUB_API_TOKEN environment variable."
+            )
+            return
+
+    pipeline = RAGPipeline(Path(directory), hf_token=hf_token)
     await pipeline.build()
 
     query = "What is the business model of WazirX ?"
     response = pipeline.query(query)
+
+    if response:
+        print("\n\n--- Answer ---")
+        print(response["result"])
+        print("\n--- Source Documents ---")
+        pretty_print_docs(response["source_documents"])
 
 
 if __name__ == "__main__":

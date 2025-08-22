@@ -106,7 +106,7 @@ class TestHuggingFaceEmbeddings(unittest.TestCase):
         mock_hf_embeddings.return_value = mock_embeddings_instance
 
         # Act
-        hf_embeddings = HuggingFaceEmbeddings()
+        hf_embeddings = HuggingFaceEmbeddings(api_token="test_token")
         embeddings = hf_embeddings.get_embeddings()
 
         # Assert

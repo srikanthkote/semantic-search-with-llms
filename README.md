@@ -116,14 +116,17 @@ This ensures that the answers are not only accurate but also engaging and easy t
 
 ## Configuration Options
 
-### Embedding Models
+### Embedding Model
 - `sentence-transformers/all-MiniLM-L6-v2` (default, lightweight)
 - `sentence-transformers/all-mpnet-base-v2` (higher quality)
 - `sentence-transformers/all-distilroberta-v1` (balanced performance)
 
-### Language Models
+### Language Model
 - `microsoft/DialoGPT-medium` (default)
 - Custom HuggingFace models supported
+
+### Reranking Model
+- `BAAI/bge-reranker-base` (default)
 
 ### Search Parameters
 - **Chunk Size**: 256 tokens (default)
