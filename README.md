@@ -41,6 +41,29 @@ You'll need a HuggingFace API token to use the embedding models:
 - Place your PDF documents in a directory (default: `~/Downloads/search-sources/`)
 - Update the directory path in the `main()` function if needed
 
+
+## Streamlit Application
+
+This project includes a Streamlit application for an interactive user experience.
+
+### Running the App
+
+1. **Ensure all dependencies are installed**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. **Run the Streamlit app**:
+   ```bash
+   streamlit run app.py
+   ```
+
+### How It Works
+
+- **HuggingFace API Token**: Enter your HuggingFace API token to authenticate with the models.
+- **Upload PDF Files**: Use the file uploader to select one or more PDF documents.
+- **Ask a Question**: Type your question in the text area.
+- **Get Answer**: Click the "Get Answer" button to process the documents and receive a response.
+
 ## Usage
 
 ### Basic Usage
