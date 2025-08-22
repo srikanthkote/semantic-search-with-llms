@@ -215,8 +215,8 @@ class ResponseGenerator:
             llm = HuggingFacePipeline(pipeline=pipe)
 
             # Create CrossEncoderReranker for document compression
-            model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
-            compressor = CrossEncoderReranker(model=model, top_n=5)
+            model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-large")
+            compressor = CrossEncoderReranker(model=model, top_n=3)
             compression_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor, base_retriever=self.retriever
             )
