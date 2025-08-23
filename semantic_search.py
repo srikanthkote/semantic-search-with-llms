@@ -18,7 +18,6 @@ from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_core.prompts import PromptTemplate
-import torch
 
 
 # Semantic Search Pipeline for PDF Documents
@@ -74,7 +73,7 @@ class DocumentLoader:
 # The DocumentChunker class splits documents into smaller chunks using LangChain’s RecursiveCharacterTextSplitter.
 # This allows for better processing by creating manageable text pieces with overlap for context preservation.
 class DocumentChunker:
-    def __init__(self, chunk_size: int = 256, chunk_overlap: int = 50):
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
@@ -201,31 +200,20 @@ class ResponseGenerator:
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name)
             # Create text generation pipeline
-            pipe = pipeline(
-                "text-generation",
-                model=model,
-                tokenizer=tokenizer,
-                max_length=512,
-                temperature=0.7,
-                do_sample=True,
-                device=0 if torch.cuda.is_available() else -1,
-            )
+            pipe = pipeline(task="text-generation", model=model, tokenizer=tokenizer)
 
             # Create HuggingFace LLM
             llm = HuggingFacePipeline(pipeline=pipe)
 
             # Create CrossEncoderReranker for document compression
             model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-large")
-            compressor = CrossEncoderReranker(model=model, top_n=3)
+            compressor = CrossEncoderReranker(model=model, top_n=1)
             compression_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor, base_retriever=self.retriever
             )
 
-            self.qa_chain = RetrievalQA.from_chain_type(
-                llm=llm,
-                retriever=compression_retriever,
-                return_source_documents=True,
-                # chain_type_kwargs={"prompt": PromptManager().create_prompt()},
+            self.qa_chain = RetrievalQA.from_llm(
+                llm, retriever=compression_retriever, return_source_documents=True
             )
 
             return True
