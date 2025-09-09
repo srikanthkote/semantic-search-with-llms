@@ -200,7 +200,12 @@ class ResponseGenerator:
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name)
             # Create text generation pipeline
-            pipe = pipeline(task="text-generation", model=model, tokenizer=tokenizer)
+            pipe = pipeline(
+                task="text-generation",
+                model=model,
+                tokenizer=tokenizer,
+                temperature=0.1,
+            )
 
             # Create HuggingFace LLM
             llm = HuggingFacePipeline(pipeline=pipe)
