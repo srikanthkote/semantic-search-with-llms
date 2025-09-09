@@ -18,6 +18,9 @@ from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_core.prompts import PromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain_core.runnables import RunnablePassthrough
 
 
 # Semantic Search Pipeline for PDF Documents
@@ -130,6 +133,7 @@ class VectorStore:
             documents=documents,
             embedding=self.embeddings,
             collection_name="semantic_search_collection",
+            #persist_directory="search.chroma",
         )
 
         return self.vectorstore
@@ -141,17 +145,17 @@ class SimilaritySearch:
 
     def similarity_search_with_score(self, query: str):
         results = self.vectorstore.similarity_search_with_score(query, k=4)
-        pretty_print_docs([doc for doc, score in results])
+        #pretty_print_docs([doc for doc, score in results])
 
 
 # Responsible for fetching relevant documents from a knowledge base (often a vector store) based on a query.
 # The Retriever class uses Chroma to retrieve relevant documents based on a query,
 # applying Maximum Marginal Relevance (MMR) to optimize for relevance and diversity.
 class Retriever:
-    def __init__(self, vectorstore: Chroma, k: int = 20):
+    def __init__(self, vectorstore: Chroma, k: int = 10):
 
         # Fetch more documents for the MMR algorithm to consider
-        # But only return the top 5
+        # But only return the top 10
         self.retriever = vectorstore.as_retriever(
             search_type="mmr",
             search_kwargs={"k": k, "fetch_k": 50},  # Maximum Marginal Relevance
@@ -159,9 +163,8 @@ class Retriever:
 
     def get_relevant_documents(self, query: str) -> List[Document]:
         results = self.retriever.invoke(query)
-        pretty_print_docs(results)
+        #pretty_print_docs(results)
         return results
-
 
 class PromptManager:
     def __init__(self):
@@ -181,7 +184,6 @@ class PromptManager:
                 "question",
             ],
         )
-
 
 # LLM (Large Language Model): Generates the answer based on the retrieved documents and the query.
 # Chain Type: Determines how the retrieved documents are combined and passed to the LLM (e.g., "stuff" chain for concatenating documents, "map_reduce" for processing documents in batches).
@@ -204,7 +206,6 @@ class ResponseGenerator:
                 task="text-generation",
                 model=model,
                 tokenizer=tokenizer,
-                temperature=0.1,
             )
 
             # Create HuggingFace LLM
@@ -217,11 +218,16 @@ class ResponseGenerator:
                 base_compressor=compressor, base_retriever=self.retriever
             )
 
+            # The primary purpose of RetrievalQA.from_llm is to combine the power of an LLM with the ability to retrieve 
+            # relevant information from a knowledge base (e.g., a vector store). 
+            # This combination allows the LLM to generate more accurate and contextually rich answers by providing 
+            # it with specific, relevant information retrieved from your data.
             self.qa_chain = RetrievalQA.from_llm(
-                llm, retriever=compression_retriever, return_source_documents=True
+                llm, retriever=compression_retriever, prompt=PromptManager().create_prompt(), return_source_documents=True
             )
 
-            return True
+            #question_answer_chain = create_stuff_documents_chain(llm, prompt=PromptManager().create_prompt())
+            #self.qa_chain = create_retrieval_chain(self.retriever, question_answer_chain)
 
         except Exception as e:
             print(f"Error setting up QA chain: {str(e)}")
@@ -232,11 +238,8 @@ class ResponseGenerator:
         if self.qa_chain is None:
             return None
 
-        print(f"Asking question: {question}")
         try:
             result = self.qa_chain.invoke(question)
-            print(f"Answer: {result['result']}")
-            pretty_print_docs(result["source_documents"])
             return result
         except Exception as e:
             print(f"Error asking question: {e}")
