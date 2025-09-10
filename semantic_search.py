@@ -13,7 +13,7 @@ from langchain_huggingface import (
 from langchain.chains import RetrievalQA
 from getpass import getpass
 from tabulate import tabulate
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, AutoModelForQuestionAnswering
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers import ContextualCompressionRetriever
@@ -128,16 +128,16 @@ class VectorStore:
         self.collection_name = collection_name
 
     def create_store(self, documents: List[Document]) -> Chroma:
-        print(f"Creating vector store with {len(documents)} documents")
+
+        print(f"Creating semantic_search_collection with {len(documents)} documents")
         self.vectorstore = Chroma.from_documents(
             documents=documents,
             embedding=self.embeddings,
             collection_name="semantic_search_collection",
-            #persist_directory="search.chroma",
         )
+        print("semantic_search_collection created in vector store")
 
         return self.vectorstore
-
 
 class SimilaritySearch:
     def __init__(self, vectorstore: Chroma):
@@ -168,13 +168,15 @@ class Retriever:
 
 class PromptManager:
     def __init__(self):
-        self.prompt_template = """You are a story teller, answering questions in an excited, insightful, and empathetic way. Answer the question based only on the provided context:
+        self.prompt_template = """SYSTEM: Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer. Use three sentences maximum and keep the answer as concise as possible. Always say "thanks for asking!" at the end of the answer.
 
         <context>
         {context}
         </context>
 
-        Question: {question}"""
+        Question: {question}
+
+        Answer:"""
 
     def create_prompt(self) -> PromptTemplate:
         return PromptTemplate(
@@ -189,23 +191,30 @@ class PromptManager:
 # Chain Type: Determines how the retrieved documents are combined and passed to the LLM (e.g., "stuff" chain for concatenating documents, "map_reduce" for processing documents in batches).
 #   The ResponseGenerator class integrates the HuggingFace model with the RetrievalQA chain,
 class ResponseGenerator:
-    def __init__(self, model_id: str = "microsoft/DialoGPT-medium"):
+    def __init__(self):
         self.retriever = None
         self.qa_chain = None
 
     def setup_qa_chain(self, retriever, model_name="microsoft/DialoGPT-medium"):
-        """Setup QA chain with Hugging Face model"""
+        """Setup QA chain with DialoGPT for text generation"""
 
         try:
             self.retriever = retriever
-            # Setup tokenizer and model
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForCausalLM.from_pretrained(model_name)
+            print(f"Loading tokenizer and model: {model_name}")
+            
+            # Load tokenizer and model for text generation
+            tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
+            model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+            
+            print("Model loaded successfully. Creating text generation pipeline...")
             # Create text generation pipeline
             pipe = pipeline(
-                task="text-generation",
+                "text-generation",
                 model=model,
                 tokenizer=tokenizer,
+                max_new_tokens=100,
+                temperature=0.7,
+                do_sample=True
             )
 
             # Create HuggingFace LLM
@@ -213,7 +222,7 @@ class ResponseGenerator:
 
             # Create CrossEncoderReranker for document compression
             model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-large")
-            compressor = CrossEncoderReranker(model=model, top_n=1)
+            compressor = CrossEncoderReranker(model=model, top_n=2)
             compression_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor, base_retriever=self.retriever
             )
@@ -222,12 +231,34 @@ class ResponseGenerator:
             # relevant information from a knowledge base (e.g., a vector store). 
             # This combination allows the LLM to generate more accurate and contextually rich answers by providing 
             # it with specific, relevant information retrieved from your data.
-            self.qa_chain = RetrievalQA.from_llm(
-                llm, retriever=compression_retriever, prompt=PromptManager().create_prompt(), return_source_documents=True
-            )
-
-            #question_answer_chain = create_stuff_documents_chain(llm, prompt=PromptManager().create_prompt())
-            #self.qa_chain = create_retrieval_chain(self.retriever, question_answer_chain)
+            # Create a prompt with the expected input variables
+            prompt = PromptManager().create_prompt()
+            
+            # Create a simpler chain that combines retrieval and generation
+            def get_answer(input_dict):
+                # Get relevant documents
+                docs = compression_retriever.get_relevant_documents(input_dict["question"])
+                
+                # Format the context
+                context = "\n\n".join(doc.page_content for doc in docs)
+                
+                # Format the prompt
+                formatted_prompt = prompt.format(
+                    context=context,
+                    question=input_dict["question"]
+                )
+                
+                # Get the response from the LLM
+                response = llm.invoke(formatted_prompt)
+                
+                # Return the response with source documents
+                return {
+                    "result": response.content if hasattr(response, 'content') else str(response),
+                    "source_documents": docs
+                }
+                
+            # Create a simple chain that just calls our function
+            self.qa_chain = get_answer
 
         except Exception as e:
             print(f"Error setting up QA chain: {str(e)}")
@@ -236,14 +267,40 @@ class ResponseGenerator:
     def ask_question(self, question):
         """Ask a question using the QA chain"""
         if self.qa_chain is None:
-            return None
+            return {"result": "QA chain not properly initialized", "source_documents": []}
 
         try:
-            result = self.qa_chain.invoke(question)
-            return result
+            # Prepare the input format expected by the chain
+            input_data = {"question": question}
+            
+            # Debug: Print input data
+            print("Input to QA chain:", input_data)
+            
+            # Call our chain function directly
+            result = self.qa_chain(input_data)
+            print("QA Chain Response:", result)  # Debug print
+            
+            # Ensure we have the expected structure
+            if not isinstance(result, dict):
+                return {
+                    "result": str(result) if result else "No answer generated.", 
+                    "source_documents": []
+                }
+                
+            # Ensure we have both result and source_documents
+            response = {
+                "result": result.get("result", "No answer generated."),
+                "source_documents": result.get("source_documents", [])
+            }
+            
+            return response
+            
         except Exception as e:
-            print(f"Error asking question: {e}")
-            return None
+            error_msg = f"Error asking question: {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            return {"result": error_msg, "source_documents": []}
 
 
 # The RAGPipeline class integrates all components - loading, chunking, embeddings, retrieval, prompt creation, and model generation -

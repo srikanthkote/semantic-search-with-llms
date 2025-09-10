@@ -50,15 +50,17 @@ def main():
                         # Query the pipeline
                         response = rag_pipeline.query(question)
 
-                    if response:
+                    if response and 'result' in response:
                         st.subheader("Answer")
                         st.write(response["result"])
-                        st.subheader("Source Documents")
-                        for doc in response["source_documents"]:
-                            with st.expander(
-                                f"Source: {doc.metadata.get('source', 'N/A')}"
-                            ):
-                                st.write(doc.page_content)
+                        
+                        if "source_documents" in response and response["source_documents"]:
+                            st.subheader("Source Documents")
+                            for doc in response["source_documents"]:
+                                with st.expander(
+                                    f"Source: {doc.metadata.get('source', 'N/A')}"
+                                ):
+                                    st.write(doc.page_content)
                     else:
                         st.error("Failed to get an answer from the pipeline.")
                 except Exception as e:
