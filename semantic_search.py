@@ -1,5 +1,6 @@
 import os
-from typing import List, Any
+import logging
+from typing import List
 from pathlib import Path
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -10,23 +11,31 @@ from langchain_huggingface import (
     HuggingFaceEmbeddings,
     HuggingFacePipeline,
 )
-from langchain.chains import RetrievalQA
-from getpass import getpass
 from tabulate import tabulate
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, AutoModelForQuestionAnswering
+from transformers import pipeline
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_core.prompts import PromptTemplate
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains.retrieval import create_retrieval_chain
-from langchain_core.runnables import RunnablePassthrough
 
 
 # Semantic Search Pipeline for PDF Documents
 # This script loads PDF documents from a specified directory, splits them into chunks,
 # and prepares them for semantic search using LangChain.
 
+def _setup_logger(self) -> logging.Logger:
+    """Set up a dedicated logger for the agent"""
+    logger = logging.getLogger(f"{self.name}")
+    logger.setLevel(logging.INFO)
+
+    if not logger.handlers:
+        console_handler = logging.StreamHandler()
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        formatter = logging.Formatter(log_format)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+    return logger
 
 # Helper function for printing docs
 def pretty_print_docs(docs):
@@ -53,6 +62,8 @@ class DocumentLoader:
     def __init__(self, dir: Path, ext: str = ".pdf"):
         self.dir = dir
         self.ext = ext
+        self.name = "DocumentLoader"
+        self.logger = _setup_logger(self)
 
     async def load_content(self) -> Path:
         try:
@@ -60,16 +71,16 @@ class DocumentLoader:
             # Iterate over files in directory
             for file in os.listdir(self.dir):
                 if file.endswith(self.ext):
-                    print(f"Processing file: {file}")
+                    #print(f"Processing file: {file}")
 
                     loader = PyPDFLoader(str(self.dir) + "/" + file, mode="single")
                     async for page in loader.alazy_load():
                         pages.append(page)
 
-            print(f"Loaded {len(pages)} pages from {self.dir}")
+            self.logger.info(f"Loaded {len(pages)} pages from {self.dir}")
             return pages
         except Exception as e:
-            print(f"Error loading content: {str(e)}")
+            self.logger.error(f"Error loading content: {str(e)}")
             return []
 
 
@@ -80,13 +91,17 @@ class DocumentChunker:
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
+        self.name = "DocumentChunker"
+        self.logger = _setup_logger(self)
 
     def create_chunks(self, documents: List[Document]) -> List[Document]:
-        chunks = self.splitter.split_documents(documents)
-        print(f"Created {len(chunks)} chunks from {len(documents)} documents")
-
-        return chunks
-
+        try:    
+            chunks = self.splitter.split_documents(documents)
+            self.logger.info(f"Created {len(chunks)} chunks from {len(documents)} documents")
+            return chunks
+        except Exception as e:
+            self.logger.error(f"Error creating chunks: {str(e)}")
+            return []
 
 # The HuggingFaceEmbeddings class uses HuggingFace’s API to convert text into vector embeddings,
 # capturing semantic meaning for effective similarity-based search.
@@ -122,20 +137,24 @@ class VectorStore:
         self,
         embeddings: HuggingFaceEndpointEmbeddings,
         collection_name: str = "semantic_search_collection",
+
     ):
         self.embeddings = embeddings
         self.vectorstore = None
         self.collection_name = collection_name
+        self.name = "VectorStore",
+        self.logger = _setup_logger(self)
+
 
     def create_store(self, documents: List[Document]) -> Chroma:
 
-        print(f"Creating semantic_search_collection with {len(documents)} documents")
+        self.logger.info(f"Creating semantic_search_collection with {len(documents)} documents")
         self.vectorstore = Chroma.from_documents(
             documents=documents,
             embedding=self.embeddings,
             collection_name="semantic_search_collection",
         )
-        print("semantic_search_collection created in vector store")
+        self.logger.info("semantic_search_collection created in vector store")
 
         return self.vectorstore
 
@@ -168,7 +187,7 @@ class Retriever:
 
 class PromptManager:
     def __init__(self):
-        self.prompt_template = """SYSTEM: Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer. Use three sentences maximum and keep the answer as concise as possible. Always say "thanks for asking!" at the end of the answer.
+        self.prompt_template = """Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer. Use atleast five sentences minimum to answer the question. Always say "thanks for asking!" at the end of the answer.
 
         <context>
         {context}
@@ -194,27 +213,31 @@ class ResponseGenerator:
     def __init__(self):
         self.retriever = None
         self.qa_chain = None
+        self.name = "ResponseGenerator"
+        self.logger = _setup_logger(self)
 
-    def setup_qa_chain(self, retriever, model_name="microsoft/DialoGPT-medium"):
+    def setup_qa_chain(self, retriever, model_name="google/flan-t5-small"):
         """Setup QA chain with DialoGPT for text generation"""
 
         try:
             self.retriever = retriever
-            print(f"Loading tokenizer and model: {model_name}")
+            self.logger.info(f"Loading tokenizer and model: {model_name}")
             
             # Load tokenizer and model for text generation
-            tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
-            model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+            from transformers import T5ForConditionalGeneration, T5Tokenizer
+            tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-small", legacy=False)
+            model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-small")
             
-            print("Model loaded successfully. Creating text generation pipeline...")
+            self.logger.info("Model loaded successfully. Creating text generation pipeline...")
             # Create text generation pipeline
             pipe = pipeline(
-                "text-generation",
+                "text2text-generation",
                 model=model,
                 tokenizer=tokenizer,
-                max_new_tokens=100,
+                max_length=100,
                 temperature=0.7,
-                do_sample=True
+                do_sample=True,
+                return_text=True
             )
 
             # Create HuggingFace LLM
@@ -227,30 +250,25 @@ class ResponseGenerator:
                 base_compressor=compressor, base_retriever=self.retriever
             )
 
-            # The primary purpose of RetrievalQA.from_llm is to combine the power of an LLM with the ability to retrieve 
-            # relevant information from a knowledge base (e.g., a vector store). 
-            # This combination allows the LLM to generate more accurate and contextually rich answers by providing 
-            # it with specific, relevant information retrieved from your data.
             # Create a prompt with the expected input variables
             prompt = PromptManager().create_prompt()
             
             # Create a simpler chain that combines retrieval and generation
             def get_answer(input_dict):
-                # Get relevant documents
-                docs = compression_retriever.get_relevant_documents(input_dict["question"])
+                # Get relevant documents using the new invoke method
+                docs = compression_retriever.invoke(input_dict["question"])
                 
                 # Format the context
                 context = "\n\n".join(doc.page_content for doc in docs)
-                
                 # Format the prompt
                 formatted_prompt = prompt.format(
                     context=context,
                     question=input_dict["question"]
                 )
                 
-                # Get the response from the LLM
+                # Invoke the LLM with the formatted prompt
                 response = llm.invoke(formatted_prompt)
-                
+
                 # Return the response with source documents
                 return {
                     "result": response.content if hasattr(response, 'content') else str(response),
@@ -261,7 +279,7 @@ class ResponseGenerator:
             self.qa_chain = get_answer
 
         except Exception as e:
-            print(f"Error setting up QA chain: {str(e)}")
+            self.logger.error(f"Error setting up QA chain: {str(e)}")
             return False
 
     def ask_question(self, question):
@@ -274,11 +292,8 @@ class ResponseGenerator:
             input_data = {"question": question}
             
             # Debug: Print input data
-            print("Input to QA chain:", input_data)
-            
-            # Call our chain function directly
             result = self.qa_chain(input_data)
-            print("QA Chain Response:", result)  # Debug print
+            self.logger.info("QA Chain Response:", result)  # Debug print
             
             # Ensure we have the expected structure
             if not isinstance(result, dict):
@@ -297,7 +312,8 @@ class ResponseGenerator:
             
         except Exception as e:
             error_msg = f"Error asking question: {str(e)}"
-            print(error_msg)
+            self.logger.error(f"Error asking question: {str(e)}", exc_info=True)
+            #print(error_msg)
             import traceback
             traceback.print_exc()
             return {"result": error_msg, "source_documents": []}
@@ -306,6 +322,7 @@ class ResponseGenerator:
 # The RAGPipeline class integrates all components - loading, chunking, embeddings, retrieval, prompt creation, and model generation -
 # into a unified pipeline that processes queries and generates responses based on relevant documents.
 class RAGPipeline:
+
     def __init__(self, dir: Path, hf_token: str = None):
         self.loader = DocumentLoader(dir)
         self.chunker = DocumentChunker()
@@ -316,6 +333,7 @@ class RAGPipeline:
         self.similaritysearch = None
         self.retriever_component = None
         self.reranker = None
+
 
     async def build(self):
         documents = await self.loader.load_content()

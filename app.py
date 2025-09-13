@@ -52,8 +52,8 @@ def main():
 
                     if response and 'result' in response:
                         st.subheader("Answer")
-                        st.write(response["result"])
-                        
+                        st.write(response["result"])                
+                                
                         if "source_documents" in response and response["source_documents"]:
                             st.subheader("Source Documents")
                             for doc in response["source_documents"]:
