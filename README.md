@@ -123,19 +123,21 @@ The system consists of several key components:
 
 ## Prompting
 
-The `PromptManager` class is responsible for creating the prompt that is sent to the language model. The default prompt is designed to make the model respond as a "story teller":
+The `PromptManager` class is responsible for creating the prompt that is sent to the language model. The default prompt is:
 
 ```
-You are a story teller, answering questions in an excited, insightful, and empathetic way. Answer the question based only on the provided context:
+Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer. Use atleast five sentences minimum to answer the question. Always say "thanks for asking!" at the end of the answer.
 
 <context>
 {context}
 </context>
 
 Question: {question}
+
+Answer:
 ```
 
-This ensures that the answers are not only accurate but also engaging and easy to understand. You can customize the prompt by modifying the `prompt_template` attribute in the `PromptManager` class.
+You can customize the prompt by modifying the `prompt_template` attribute in the `PromptManager` class.
 
 ## Configuration Options
 
@@ -145,15 +147,15 @@ This ensures that the answers are not only accurate but also engaging and easy t
 - `sentence-transformers/all-distilroberta-v1` (balanced performance)
 
 ### Language Model
-- `microsoft/DialoGPT-medium` (default)
+- `google/flan-t5-small` (default)
 - Custom HuggingFace models supported
 
 ### Reranking Model
-- `BAAI/bge-reranker-base` (default)
+- `BAAI/bge-reranker-large` (default)
 
 ### Search Parameters
-- **Chunk Size**: 256 tokens (default)
-- **Chunk Overlap**: 50 tokens (default)
+- **Chunk Size**: 1000 tokens (default)
+- **Chunk Overlap**: 200 tokens (default)
 - **Retrieval Count**: 3-4 documents (configurable)
 - **Search Type**: MMR (Maximum Marginal Relevance)
 

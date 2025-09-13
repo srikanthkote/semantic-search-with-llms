@@ -97,11 +97,9 @@ class TestDocumentChunker(unittest.TestCase):
 
 
 class TestHuggingFaceEmbeddings(unittest.TestCase):
-    @patch("semantic_search.getpass")
     @patch("semantic_search.HuggingFaceEndpointEmbeddings")
-    def test_get_embeddings_successfully(self, mock_hf_embeddings, mock_getpass):
+    def test_get_embeddings_successfully(self, mock_hf_embeddings):
         # Arrange
-        mock_getpass.return_value = "test_token"
         mock_embeddings_instance = MagicMock()
         mock_hf_embeddings.return_value = mock_embeddings_instance
 
@@ -190,51 +188,58 @@ class TestPromptManager(unittest.TestCase):
         # Assert
         self.assertIn("context", prompt.input_variables)
         self.assertIn("question", prompt.input_variables)
-        self.assertIn("story teller", prompt.template)
+        self.assertIn("thanks for asking!", prompt.template)
 
 
 class TestResponseGenerator(unittest.TestCase):
-    @patch("semantic_search.ContextualCompressionRetriever")
-    @patch("semantic_search.AutoTokenizer")
-    @patch("semantic_search.AutoModelForCausalLM")
+    @patch("transformers.T5ForConditionalGeneration")
+    @patch("transformers.T5Tokenizer")
     @patch("semantic_search.pipeline")
-    @patch("semantic_search.RetrievalQA")
+    @patch("semantic_search.HuggingFaceCrossEncoder")
+    @patch("semantic_search.CrossEncoderReranker")
+    @patch("semantic_search.ContextualCompressionRetriever")
     @patch("semantic_search.HuggingFacePipeline")
-    def test_setup_qa_chain_and_ask_question(
+    def test_setup_qa_chain_successfully(
         self,
         mock_hf_pipeline,
-        mock_retrieval_qa,
-        mock_pipeline,
-        mock_model,
-        mock_tokenizer,
         mock_compression_retriever,
+        mock_reranker,
+        mock_cross_encoder,
+        mock_pipeline,
+        mock_t5_tokenizer,
+        mock_t5_model,
     ):
         # Arrange
         mock_retriever = MagicMock()
         generator = ResponseGenerator()
-        mock_hf_pipeline.return_value = MagicMock()
-        mock_compression_retriever.return_value = MagicMock()
+        mock_t5_model.from_pretrained.return_value = MagicMock()
+        mock_t5_tokenizer.from_pretrained.return_value = MagicMock()
 
         # Act
-        success = generator.setup_qa_chain(mock_retriever)
+        result = generator.setup_qa_chain(mock_retriever)
 
         # Assert
-        self.assertTrue(success)
         self.assertIsNotNone(generator.qa_chain)
+        self.assertIsNot(result, False)
 
-        # Arrange for ask_question
+    def test_ask_question_with_mock_chain(self):
+        # Arrange
+        generator = ResponseGenerator()
         question = "test question"
         expected_result = {
             "result": "test answer",
             "source_documents": [MagicMock(page_content="doc1", metadata={})],
         }
-        generator.qa_chain.invoke.return_value = expected_result
+        
+        # Mock the qa_chain to be a simple function that returns the expected result
+        generator.qa_chain = MagicMock(return_value=expected_result)
 
         # Act
-        generator.ask_question(question)
+        response = generator.ask_question(question)
 
         # Assert
-        generator.qa_chain.invoke.assert_called_with(question)
+        self.assertEqual(response, expected_result)
+        generator.qa_chain.assert_called_with({"question": question})
 
 
 @patch("semantic_search.ResponseGenerator")
