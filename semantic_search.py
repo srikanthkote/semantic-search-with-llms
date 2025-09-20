@@ -223,21 +223,20 @@ class ResponseGenerator:
             self.retriever = retriever
             self.logger.info(f"Loading tokenizer and model: {model_name}")
             
-            # Load tokenizer and model for text generation
-            from transformers import T5ForConditionalGeneration, T5Tokenizer
-            tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-small", legacy=False)
-            model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-small")
+            # Load tokenizer and model for text generation (use fast tokenizer)
+            from transformers import T5ForConditionalGeneration, T5TokenizerFast
+            tokenizer = T5TokenizerFast.from_pretrained(model_name)
+            model = T5ForConditionalGeneration.from_pretrained(model_name)
             
             self.logger.info("Model loaded successfully. Creating text generation pipeline...")
-            # Create text generation pipeline
+            # Create text generation pipeline (compatible with T5)
             pipe = pipeline(
                 "text2text-generation",
                 model=model,
                 tokenizer=tokenizer,
-                max_length=100,
+                max_length=256,
                 temperature=0.7,
                 do_sample=True,
-                return_text=True
             )
 
             # Create HuggingFace LLM
@@ -245,7 +244,7 @@ class ResponseGenerator:
 
             # Create CrossEncoderReranker for document compression
             model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-large")
-            compressor = CrossEncoderReranker(model=model, top_n=2)
+            compressor = CrossEncoderReranker(model=model, top_n=3)
             compression_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor, base_retriever=self.retriever
             )
@@ -265,9 +264,34 @@ class ResponseGenerator:
                     context=context,
                     question=input_dict["question"]
                 )
+                #self.logger.info("Formatted prompt: ", formatted_prompt)
+                print("Formatted prompt: ", formatted_prompt)
                 
-                # Invoke the LLM with the formatted prompt
-                response = llm.invoke(formatted_prompt)
+                # Ensure input length does not exceed model limits by truncating via tokenizer
+                try:
+                    # Some tokenizers set an extremely large default; cap to 512 for FLAN-T5
+                    max_len = getattr(tokenizer, "model_max_length", 512) or 512
+                    if isinstance(max_len, int) and max_len > 4096:
+                        max_len = 512
+                    tokenized = tokenizer(
+                        formatted_prompt,
+                        truncation=True,
+                        max_length=max_len,
+                        return_tensors=None,
+                    )
+                    # Decode back the (possibly truncated) prompt
+                    input_ids = tokenized.get("input_ids", [])
+                    # Handle both [ids] and [[ids]]
+                    if isinstance(input_ids, list) and input_ids and isinstance(input_ids[0], list):
+                        input_ids = input_ids[0]
+                    truncated_prompt = tokenizer.decode(input_ids, skip_special_tokens=True)
+                except Exception as e:
+                    # Fallback to original prompt if tokenization fails
+                    truncated_prompt = formatted_prompt
+                    print(f"Warning: tokenizer truncation failed: {e}")
+
+                # Invoke the LLM with the truncated prompt
+                response = llm.invoke(truncated_prompt)
 
                 # Return the response with source documents
                 return {
@@ -385,14 +409,15 @@ async def main():
     pipeline = RAGPipeline(Path(directory), hf_token=hf_token)
     await pipeline.build()
 
-    query = "What is the business model of WazirX ?"
+    #query = "What is the business model of WazirX ?"
+    query = "What is Industry 5.0 ?"
     response = pipeline.query(query)
 
     if response:
         print("\n\n--- Answer ---")
         print(response["result"])
-        print("\n--- Source Documents ---")
-        pretty_print_docs(response["source_documents"])
+        #print("\n--- Source Documents ---")
+        #pretty_print_docs(response["source_documents"])
 
 
 if __name__ == "__main__":

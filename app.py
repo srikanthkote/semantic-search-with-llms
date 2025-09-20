@@ -50,6 +50,10 @@ def main():
                         # Query the pipeline
                         response = rag_pipeline.query(question)
 
+                        if response:
+                            print("\n\n--- Answer ---")
+                            print(response["result"])
+
                     if response and 'result' in response:
                         st.subheader("Answer")
                         st.write(response["result"])                
