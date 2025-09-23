@@ -187,13 +187,14 @@ class Retriever:
 
 class PromptManager:
     def __init__(self):
-        self.prompt_template = """Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer. Use atleast five sentences minimum to answer the question. Always say "thanks for asking!" at the end of the answer.
+        self.prompt_template = """Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer. 
+
+        Question: {question}
+        Write an overview using 1-2 paragraphs summarizing the core idea.
 
         <context>
         {context}
         </context>
-
-        Question: {question}
 
         Answer:"""
 
@@ -216,7 +217,7 @@ class ResponseGenerator:
         self.name = "ResponseGenerator"
         self.logger = _setup_logger(self)
 
-    def setup_qa_chain(self, retriever, model_name="google/flan-t5-small"):
+    def setup_qa_chain(self, retriever, model_name="google/flan-t5-xl"):
         """Setup QA chain with DialoGPT for text generation"""
 
         try:
@@ -285,12 +286,15 @@ class ResponseGenerator:
                     if isinstance(input_ids, list) and input_ids and isinstance(input_ids[0], list):
                         input_ids = input_ids[0]
                     truncated_prompt = tokenizer.decode(input_ids, skip_special_tokens=True)
+
+                    # Invoke the LLM with the truncated prompt
+                    print("Truncated prompt: ", truncated_prompt)
+
                 except Exception as e:
                     # Fallback to original prompt if tokenization fails
                     truncated_prompt = formatted_prompt
                     print(f"Warning: tokenizer truncation failed: {e}")
 
-                # Invoke the LLM with the truncated prompt
                 response = llm.invoke(truncated_prompt)
 
                 # Return the response with source documents
