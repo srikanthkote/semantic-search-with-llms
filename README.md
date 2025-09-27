@@ -104,7 +104,6 @@ The system consists of several key components:
 - **`DocumentChunker`**: Splits documents into smaller, overlapping chunks
 - **`HuggingFaceEmbeddings`**: Creates vector embeddings using HuggingFace models
 - **`VectorStore`**: Manages ChromaDB vector storage and similarity search
-- **`SimilaritySearch`**: Performs similarity search with scoring
 - **`Retriever`**: Implements MMR-based document retrieval
 - **`PromptManager`**: Creates structured prompts for the language model
 - **`ResponseGenerator`**: Integrates the reranker and language model to generate answers from the most relevant documents.
@@ -123,21 +122,30 @@ The system consists of several key components:
 
 ## Prompting
 
-The `PromptManager` class is responsible for creating the prompt that is sent to the language model. The default prompt is:
+The `PromptManager` class dynamically constructs a detailed prompt to guide the language model in generating high-quality, well-structured answers. Instead of a static template, the prompt is built to include the retrieved context and a set of specific instructions for the model.
+
+The generated prompt follows this structure:
 
 ```
-Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer. Use atleast five sentences minimum to answer the question. Always say "thanks for asking!" at the end of the answer.
-
-<context>
+<Context>
 {context}
-</context>
+</Context>
 
-Question: {question}
+<Question>
+{question}
+</Question>
+
+Write an original answer in 2–3 paragraphs (at least 7 sentences total), then add 3–5 concise takeaways. Synthesize from the context and your background knowledge, but strictly paraphrase: never use exact wording from the context other than short proper nouns. Avoid verbatim copying: ensure no sequence of 6 or more consecutive words appears exactly as in the context. Rephrase with synonyms and altered structure. Do not repeat lines from the prompt or context.
 
 Answer:
 ```
 
-You can customize the prompt by modifying the `prompt_template` attribute in the `PromptManager` class.
+This structured approach ensures that the model's output is not only relevant but also adheres to a specific format, including:
+- A synthesized answer of 2-3 paragraphs.
+- A list of 3-5 key takeaways.
+- Strict paraphrasing requirements to avoid direct copying from source documents.
+
+This mechanism is implemented in the `build_final_from_outline_prompt` method of the `PromptManager` class.
 
 ## Configuration Options
 
@@ -147,25 +155,29 @@ You can customize the prompt by modifying the `prompt_template` attribute in the
 - `sentence-transformers/all-distilroberta-v1` (balanced performance)
 
 ### Language Model
-- `google/flan-t5-small` (default)
+- `google/flan-t5-xl` (default)
 - Custom HuggingFace models supported
 
 ### Reranking Model
 - `BAAI/bge-reranker-large` (default)
 
 ### Search Parameters
-- **Chunk Size**: 1000 tokens (default)
-- **Chunk Overlap**: 200 tokens (default)
-- **Retrieval Count**: 3-4 documents (configurable)
-- **Search Type**: MMR (Maximum Marginal Relevance)
+- **Chunk Size**: 500 tokens (default)
+- **Chunk Overlap**: 100 tokens (default)
+- **Retrieval Strategy**: The system uses a two-step retrieval process:
+  1. **Initial Retrieval**: Fetches 10 documents using Maximum Marginal Relevance (MMR) to ensure a diverse set of results.
+  2. **Reranking**: A `CrossEncoderReranker` then refines these results, prioritizing the top 3 most relevant documents for answer generation.
 
 ## Example Output
 
-The system provides detailed output for each stage of the pipeline, using the `tabulate` library to format the results in an easy-to-read grid. This includes:
-- Document processing progress
-- Similarity search results with scores
-- Retrieved document content and metadata, clearly showing the source of the information
-- The final generated answer alongside the source documents that were used to create it
+The system's output varies depending on how it is run:
+
+- **Command-Line Interface**: When running `semantic_search.py` directly, the script will print the final generated answer to the console.
+
+- **Streamlit Application**: The interactive web application provides a more detailed breakdown of the results, including:
+  - The final answer.
+  - The source documents that were used to generate the answer, displayed in expandable sections.
+  - The final prompt sent to the language model, available for inspection.
 
 ## Requirements
 
