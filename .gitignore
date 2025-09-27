@@ -208,3 +208,6 @@ __marimo__/
 
 # Database
 search.chroma/
+
+# VSCode
+launch.json

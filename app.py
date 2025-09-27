@@ -20,7 +20,7 @@ def main():
     )
 
     # Ask a question
-    question = st.text_area("Ask a question about the documents:")
+    question = st.text_area('Ask a question about the documents:', 'What is Industry 5.0 ?')
 
     if st.button("Get Answer"):
         if not hf_token:
@@ -50,23 +50,24 @@ def main():
                         # Query the pipeline
                         response = rag_pipeline.query(question)
 
-                        if response:
-                            print("\n\n--- Answer ---")
-                            print(response["result"])
+                        if response and 'result' in response:
+                            st.subheader("Answer")
+                            st.text(response["result"])                
 
-                    if response and 'result' in response:
-                        st.subheader("Answer")
-                        st.write(response["result"])                
-                                
-                        if "source_documents" in response and response["source_documents"]:
-                            st.subheader("Source Documents")
-                            for doc in response["source_documents"]:
-                                with st.expander(
-                                    f"Source: {doc.metadata.get('source', 'N/A')}"
-                                ):
-                                    st.write(doc.page_content)
-                    else:
-                        st.error("Failed to get an answer from the pipeline.")
+                            # Show the final prompt sent to the LLM (for debugging/inspection)
+                            if "final_prompt" in response and response["final_prompt"]:
+                                with st.expander("Final Prompt (to LLM)"):
+                                    st.text(response["final_prompt"]) 
+                                    
+                            if "source_documents" in response and response["source_documents"]:
+                                st.subheader("Source Documents")
+                                for doc in response["source_documents"]:
+                                    with st.expander(
+                                        f"Source: {doc.metadata.get('source', 'N/A')}"
+                                    ):
+                                        st.text(doc.page_content)
+                        else:
+                            st.error("Failed to get an answer from the pipeline.")
                 except Exception as e:
                     st.error(f"An error occurred: {e}")
 

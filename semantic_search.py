@@ -8,15 +8,15 @@ from langchain.schema import Document
 from langchain_chroma import Chroma
 from langchain_huggingface import (
     HuggingFaceEndpointEmbeddings,
-    HuggingFaceEmbeddings,
     HuggingFacePipeline,
 )
 from tabulate import tabulate
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 
 # Semantic Search Pipeline for PDF Documents
@@ -37,24 +37,7 @@ def _setup_logger(self) -> logging.Logger:
 
     return logger
 
-# Helper function for printing docs
-def pretty_print_docs(docs):
-
-    if not docs:
-        print("No documents found.")
-        return
-
-    print(f"Found {len(docs)} results")
-
-    table_data = [[doc.page_content, doc.metadata["source"]] for doc in docs]
-    print(
-        tabulate(
-            table_data,
-            headers=["Page Content", "Metadata"],
-            maxcolwidths=[70, 70],
-            tablefmt="grid",
-        )
-    )
+# (Removed pretty_print_docs; not used.)
 
 
 # DocumentLoader class is responsible for loading PDF documents from a directory
@@ -87,7 +70,7 @@ class DocumentLoader:
 # The DocumentChunker class splits documents into smaller chunks using LangChain’s RecursiveCharacterTextSplitter.
 # This allows for better processing by creating manageable text pieces with overlap for context preservation.
 class DocumentChunker:
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 100):
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
@@ -142,7 +125,7 @@ class VectorStore:
         self.embeddings = embeddings
         self.vectorstore = None
         self.collection_name = collection_name
-        self.name = "VectorStore",
+        self.name = "VectorStore"
         self.logger = _setup_logger(self)
 
 
@@ -182,7 +165,6 @@ class Retriever:
 
     def get_relevant_documents(self, query: str) -> List[Document]:
         results = self.retriever.invoke(query)
-        #pretty_print_docs(results)
         return results
 
 class PromptManager:
@@ -206,6 +188,42 @@ class PromptManager:
                 "question",
             ],
         )
+
+    # (Removed build_outline_prompt; not used.)
+
+
+    def build_final_from_outline_prompt(self, question: str, condensed: str = "") -> str:
+        """Context + question prompt with explicit length and structure requirements."""
+        return (
+            f"<Context>\n{condensed.strip()}\n</Context>\n\n"
+            f"<Question>\n{question.strip()}\n</Question>\n\n"
+            "Write an original answer in 2–3 paragraphs (at least 7 sentences total), then add 3–5 concise takeaways. "
+            "Synthesize from the context and your background knowledge, but strictly paraphrase: never use exact wording from the context other than short proper nouns. "
+            "Avoid verbatim copying: ensure no sequence of 6 or more consecutive words appears exactly as in the context. Rephrase with synonyms and altered structure. "
+            "Do not repeat lines from the prompt or context.\n\n"
+            "Answer:"
+        )
+
+    def truncate_to_model_limit(self, prompt: str, model_id: str, char_cap: int = 3800) -> str:
+        """Tokenize + truncate the prompt to the model input window with a char fallback."""
+        try:
+            # Use AutoTokenizer so it matches the model family (BART/PEGASUS/T5/etc.)
+            tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+            max_len = getattr(tok, "model_max_length", 512) or 512
+            if isinstance(max_len, int) and max_len > 4096:
+                max_len = 1024
+            enc = tok(prompt, truncation=True, max_length=max_len, return_tensors=None)
+            input_ids = enc.get("input_ids", [])
+            if isinstance(input_ids, list) and input_ids and isinstance(input_ids[0], list):
+                input_ids = input_ids[0]
+            out = tok.decode(input_ids, skip_special_tokens=True)
+            if len(out) > char_cap:
+                out = out[:char_cap]
+            return out
+        except Exception:
+            # Fallback: simple char cap
+            return prompt[:char_cap]
+
 
 # LLM (Large Language Model): Generates the answer based on the retrieved documents and the query.
 # Chain Type: Determines how the retrieved documents are combined and passed to the LLM (e.g., "stuff" chain for concatenating documents, "map_reduce" for processing documents in batches).
@@ -235,9 +253,16 @@ class ResponseGenerator:
                 "text2text-generation",
                 model=model,
                 tokenizer=tokenizer,
-                max_length=256,
-                temperature=0.7,
+                max_new_tokens=450,
+                min_new_tokens=160,
                 do_sample=True,
+                temperature=0.9,
+                top_p=0.9,
+                top_k=50,
+                repetition_penalty=1.3,
+                no_repeat_ngram_size=8,
+                encoder_no_repeat_ngram_size=8,
+                renormalize_logits=True,
             )
 
             # Create HuggingFace LLM
@@ -250,24 +275,22 @@ class ResponseGenerator:
                 base_compressor=compressor, base_retriever=self.retriever
             )
 
-            # Create a prompt with the expected input variables
-            prompt = PromptManager().create_prompt()
-            
             # Create a simpler chain that combines retrieval and generation
             def get_answer(input_dict):
+
                 # Get relevant documents using the new invoke method
                 docs = compression_retriever.invoke(input_dict["question"])
                 
                 # Format the context
                 context = "\n\n".join(doc.page_content for doc in docs)
-                # Format the prompt
-                formatted_prompt = prompt.format(
-                    context=context,
-                    question=input_dict["question"]
-                )
-                #self.logger.info("Formatted prompt: ", formatted_prompt)
-                print("Formatted prompt: ", formatted_prompt)
-                
+
+                # Create final prompt with explicit length/structure
+                outline_prompt = PromptManager().build_final_from_outline_prompt(input_dict["question"], context)
+                formatted_prompt = PromptManager().truncate_to_model_limit(outline_prompt, model_name)
+
+                self.logger.debug(f"Formatted prompt length: {len(formatted_prompt)} chars")
+
+
                 # Ensure input length does not exceed model limits by truncating via tokenizer
                 try:
                     # Some tokenizers set an extremely large default; cap to 512 for FLAN-T5
@@ -286,21 +309,22 @@ class ResponseGenerator:
                     if isinstance(input_ids, list) and input_ids and isinstance(input_ids[0], list):
                         input_ids = input_ids[0]
                     truncated_prompt = tokenizer.decode(input_ids, skip_special_tokens=True)
-
-                    # Invoke the LLM with the truncated prompt
-                    print("Truncated prompt: ", truncated_prompt)
+                    self.logger.debug(f"Truncated prompt token count: {len(input_ids)}")
 
                 except Exception as e:
                     # Fallback to original prompt if tokenization fails
                     truncated_prompt = formatted_prompt
                     print(f"Warning: tokenizer truncation failed: {e}")
 
+                # Invoke the LLM with the truncated prompt to respect model max length
                 response = llm.invoke(truncated_prompt)
 
                 # Return the response with source documents
+                raw_text = response.content if hasattr(response, 'content') else str(response)
                 return {
-                    "result": response.content if hasattr(response, 'content') else str(response),
-                    "source_documents": docs
+                    "result": raw_text,
+                    "source_documents": docs,
+                    "final_prompt": truncated_prompt,
                 }
                 
             # Create a simple chain that just calls our function
@@ -319,9 +343,8 @@ class ResponseGenerator:
             # Prepare the input format expected by the chain
             input_data = {"question": question}
             
-            # Debug: Print input data
             result = self.qa_chain(input_data)
-            self.logger.info("QA Chain Response:", result)  # Debug print
+            self.logger.info(f"QA Chain Response: {result}")
             
             # Ensure we have the expected structure
             if not isinstance(result, dict):
@@ -333,17 +356,15 @@ class ResponseGenerator:
             # Ensure we have both result and source_documents
             response = {
                 "result": result.get("result", "No answer generated."),
-                "source_documents": result.get("source_documents", [])
+                "source_documents": result.get("source_documents", []),
+                "final_prompt": result.get("final_prompt", "")
             }
             
             return response
             
         except Exception as e:
             error_msg = f"Error asking question: {str(e)}"
-            self.logger.error(f"Error asking question: {str(e)}", exc_info=True)
-            #print(error_msg)
-            import traceback
-            traceback.print_exc()
+            self.logger.error(error_msg, exc_info=True)
             return {"result": error_msg, "source_documents": []}
 
 
